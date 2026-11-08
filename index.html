@@ -136,7 +136,15 @@ function updatePeers(){
 const pres=async()=>{try{if(lobby&&ME)await lobby.track({user_id:ME,nm:String(S.name||'Player').slice(0,12),av:S.av?.startsWith('data:')?'a0':(S.av||'a0')})}catch(e){console.warn('Presence:',e)}};
 async function saveCloudProfile(){
  if(!sb||!ME||!S.name)return;
- const {error}=await sb.from('profiles').upsert({id:ME,nickname:String(S.name).slice(0,12),avatar:S.av?.startsWith('data:')?'a0':(S.av||'a0'),updated_at:new Date().toISOString()});
+ // username wajib diisi oleh skema profiles awal; gunakan ID stabil agar unik,
+ // sedangkan nama tampilan pemain disimpan pada nickname.
+ const {error}=await sb.from('profiles').upsert({
+  id:ME,
+  username:'player_'+ME.replace(/-/g,'').slice(0,12),
+  nickname:String(S.name).slice(0,12),
+  avatar:S.av?.startsWith('data:')?'a0':(S.av||'a0'),
+  updated_at:new Date().toISOString()
+ });
  if(error)throw error;
  await pres();
 }
