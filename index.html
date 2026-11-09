@@ -125,15 +125,37 @@ function fin(m,k,again){const g=reward(k),d=document.createElement('div');d.clas
 const SUPABASE_URL='https://bgxmownnkguncjbhwant.supabase.co';
 const SUPABASE_PUBLISHABLE_KEY='sb_publishable_6Pfaix9EPi72cwPDzrI5GA_OIbJVsEu';
 let sb=null,R=null,ME=null,NET=0,PEERS=[],PG='',lobby=null,peerListeners=[];
+const CLOUD_DIAG={channel:'belum dibuat',presence:'belum dicoba',profile:'belum dicoba',error:''};
 const peerId=p=>String(p?.peer??p?.user_id??p?.id??'');
 const peerPresence=p=>p?.presence&&typeof p.presence==='object'?p.presence:p||{};
-const jsq=v=>"'"+String(v??'').replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/[\r\n]/g,' ')+'"';
+const jsq=v=>"'"+String(v??'').replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/[\r\n]/g,' ')+"'";
 function updatePeers(){
- const state=lobby?.presenceState?.()||{}, out=[];
- Object.values(state).flat().forEach(v=>{if(v?.user_id)out.push({kind:'viewer',peer:v.user_id,by:v.user_id,isMe:v.user_id===ME,presence:{nm:v.nm||'Player',av:v.av||'a0'}})});
- PEERS=out;peerListeners.forEach(fn=>fn({peers:PEERS}));if(CUR==='fr')fr(PG);
+ const state=lobby?.presenceState?.()||{}, byId=new Map();
+ Object.entries(state).forEach(([key,items])=>{
+  (Array.isArray(items)?items:[items]).forEach(v=>{
+   if(!v)return;
+   const uid=String(v.user_id||v.uid||key||'');
+   if(uid)byId.set(uid,{kind:'viewer',peer:uid,by:uid,isMe:uid===ME,presence:{nm:v.nm||'Player',av:v.av||'a0'}});
+  });
+ });
+ PEERS=[...byId.values()];
+ peerListeners.forEach(fn=>fn({peers:PEERS}));
+ if(CUR==='fr')fr(PG);
 }
-const pres=async()=>{try{if(lobby&&ME)await lobby.track({user_id:ME,nm:String(S.name||'Player').slice(0,12),av:S.av?.startsWith('data:')?'a0':(S.av||'a0')})}catch(e){console.warn('Presence:',e)}};
+const pres=async()=>{
+ if(!lobby||!ME){CLOUD_DIAG.presence='channel/user belum siap';return}
+ try{
+  const result=await lobby.track({user_id:ME,nm:String(S.name||'Player').slice(0,12),av:S.av?.startsWith('data:')?'a0':(S.av||'a0')});
+  CLOUD_DIAG.presence=String(result||'tidak ada status');
+  updatePeers();
+  return result;
+ }catch(e){
+  CLOUD_DIAG.presence='gagal: '+(e?.message||String(e));
+  CLOUD_DIAG.error=CLOUD_DIAG.presence;
+  console.warn('Presence:',e);
+  throw e;
+ }
+};
 async function saveCloudProfile(){
  if(!sb||!ME||!S.name)return;
  // username wajib diisi oleh skema profiles awal; gunakan ID stabil agar unik,
@@ -172,13 +194,13 @@ async function initCloud(){
   const o=document.createElement('div');o.className='ov';o.innerHTML=`<div class="card"><h2 style="margin:0">${esc(String(d.nm||'Player').slice(0,12))}</h2><p>${t('invf')} ${t(d.g)}</p><button class="btn big" id="ya">${ic('check',20)} ${t('acc')}</button><button class="btn big alt" id="no">${t('dec')}</button></div>`;document.body.appendChild(o);
   $('#no').onclick=()=>o.remove();$('#ya').onclick=async()=>{o.remove();try{const rm=await makeRoom(String(d.rid));vs(d.g,'o',{room:rm,me:1,n:[String(d.nm||'Player').slice(0,12),S.name]})}catch(e){toast(t('err'))}};
  });
- const status=await new Promise(resolve=>lobby.subscribe(v=>{if(v==='SUBSCRIBED')resolve(true);else if(v==='CHANNEL_ERROR'||v==='TIMED_OUT')resolve(false)}));
- if(!status)throw new Error('Lobby gagal tersambung');
+ const status=await new Promise(resolve=>lobby.subscribe(v=>{CLOUD_DIAG.channel=v;if(v==='SUBSCRIBED')resolve(true);else if(v==='CHANNEL_ERROR'||v==='TIMED_OUT')resolve(false)}));
+ if(!status)throw new Error('Lobby gagal tersambung (status: '+CLOUD_DIAG.channel+')');
  NET=1;R={presence:pres,onPeers(fn){peerListeners.push(fn);fn({peers:PEERS})},peers(){return PEERS},join:makeRoom,emit(event,data){return lobby.send({type:'broadcast',event,payload:{_from:ME,_data:data}})},on(event,fn){lobby.on('broadcast',{event},({payload})=>{const d=payload?._data||payload;fn({data:d,isMe:payload?._from===ME})});return this}};
- if(S.name){try{await saveCloudProfile()}catch(e){console.warn('Profile sync:',e);toast('Profil cloud belum tersimpan')}}
+ if(S.name){try{await saveCloudProfile();CLOUD_DIAG.profile='berhasil'}catch(e){CLOUD_DIAG.profile='gagal: '+(e?.message||String(e));console.warn('Profile sync:',e);toast('Profil cloud belum tersimpan')}}
  await pres();updatePeers();
 }
-(async()=>{try{await initCloud()}catch(e){NET=0;console.warn('Supabase belum siap:',e);setTimeout(()=>toast('Online belum tersambung. Periksa pengaturan Supabase.'),900)}})();
+(async()=>{try{await initCloud()}catch(e){NET=0;CLOUD_DIAG.error=e?.message||String(e);console.warn('Supabase belum siap:',e);setTimeout(()=>toast('Online belum tersambung. Periksa pengaturan Supabase.'),900)}})();
 async function fr(g){
  PG=g||'';
  const h=hd(t('fr'),g?`pg('${g}')`:'menu()');
@@ -194,8 +216,23 @@ async function fr(g){
  const friendRows=friends.length?friends.map(f=>{const id=jsq(f.id),onlineNow=isOn(f.id);return `<div class="row"><i class="dot ${onlineNow?'on':''}"></i><span>${esc(f.nickname||'Player')}</span>${onlineNow&&g?`<button class="btn sm" onclick="inv(${id},${jsq(g)})">${ic('plus',16)} ${t('inv')}</button>`:`<small>${onlineNow?'Online':t('offl')}</small>`}<button class="btn sm alt" onclick="rmf(${id})">${ic('x',16)}</button></div>`}).join(''):`<p class="tn">Belum ada teman. Tambahkan pemain yang sedang online.</p>`;
  const requestRows=requests.map(r=>`<div class="row"><span>${esc(r.profile?.nickname||'Player')}</span><button class="btn sm" onclick="answerFriend('${r.id}',true)">${t('acc')}</button><button class="btn sm alt" onclick="answerFriend('${r.id}',false)">${t('dec')}</button></div>`).join('');
  const players=online.filter(p=>!friendIds.includes(peerId(p))).map(p=>{const pr=peerPresence(p),id=jsq(peerId(p)),name=String(pr.nm||'Player').slice(0,12),avatar=/^a\d$/.test(pr.av||'')?pr.av:'a0';return `<div class="row">${av(avatar,34)}<span>${esc(name)}</span><button class="btn sm alt3" onclick="addf(${id},${jsq(name)})">${ic('plus',16)} ${t('add')}</button>${g?`<button class="btn sm" onclick="inv(${id},${jsq(g)})">${ic('wifi',16)} ${t('inv')}</button>`:''}</div>`}).join('');
- app.innerHTML=h+(NET?`<p class="tn">${t('conn')}: <b>${online.length}</b></p>`:`<div class="card">Online belum tersambung. Pastikan Anonymous Sign-Ins dan SQL setup sudah diaktifkan di Supabase.</div>`)+(g?`<p class="tn">${t(g)}</p>`:'')+(requests.length?`<h3>Permintaan Teman</h3>${requestRows}`:'')+`<h3>${t('myf')}</h3>${friendRows}<h3>${t('onp')}</h3>${players||`<p class="tn">${t('noo')}</p>`}`;
+ const diag=`<div class="card" style="gap:6px;text-align:left;font-size:12px"><b>Diagnostik koneksi</b><span>Channel: ${esc(CLOUD_DIAG.channel)}</span><span>Presence: ${esc(CLOUD_DIAG.presence)}</span><span>Profil: ${esc(CLOUD_DIAG.profile)}</span><span>ID akun: ${esc(ME?ME.slice(0,8)+'…':'belum ada')}</span>${CLOUD_DIAG.error?`<span style="color:#ff8a8a">Error: ${esc(CLOUD_DIAG.error)}</span>`:''}<button class="btn sm alt" onclick="checkOnline()">Periksa ulang koneksi</button></div>`;
+ app.innerHTML=h+(NET?`<p class="tn">${t('conn')}: <b>${online.length}</b></p>`:`<div class="card">Online belum tersambung. Lihat diagnostik di bawah untuk mengetahui tahap yang gagal.</div>`)+(g?`<p class="tn">${t(g)}</p>`:'')+(requests.length?`<h3>Permintaan Teman</h3>${requestRows}`:'')+`<h3>${t('myf')}</h3>${friendRows}<h3>${t('onp')}</h3>${players||`<p class="tn">${t('noo')}</p>`}`+diag;
  CUR='fr';
+}
+async function checkOnline(){
+ try{
+  if(!sb)throw new Error('Client Supabase belum dibuat');
+  if(!ME)throw new Error('Akun anonim belum tersedia');
+  if(!lobby)throw new Error('Channel lobby belum dibuat');
+  await pres();updatePeers();
+  toast('Status diperiksa: '+CLOUD_DIAG.presence);
+  if(CUR==='fr')fr(PG);
+ }catch(e){
+  CLOUD_DIAG.error=e?.message||String(e);
+  toast('Pemeriksaan gagal: '+CLOUD_DIAG.error);
+  if(CUR==='fr')fr(PG);
+ }
 }
 async function addf(id,n){try{const {data,error}=await sb.rpc('send_friend_request',{target_user:id});if(error)throw error;toast(data==='friends'?'Sudah berteman':data==='accepted'?'Permintaan diterima otomatis':'Permintaan teman dikirim');fr(PG)}catch(e){console.error(e);toast('Gagal mengirim permintaan teman')}}
 async function answerFriend(id,accept){try{const {error}=await sb.rpc('respond_friend_request',{request_id:id,accept_request:accept});if(error)throw error;toast(accept?'Teman berhasil ditambahkan':'Permintaan ditolak');fr(PG)}catch(e){console.error(e);toast('Gagal memproses permintaan')}}
